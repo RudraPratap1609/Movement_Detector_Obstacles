@@ -1,21 +1,3 @@
-"""
-Vehicle Speed Estimator — Auto-Calibrated Video Pipeline
-=========================================================
-Detects, tracks, and estimates vehicle speed from video using:
-  - YOLOv8 (ultralytics) for detection
-  - ByteTrack (supervision) for multi-object tracking
-  - Auto-calibration from bounding box size (no manual points needed)
-
-The key insight: a vehicle's bounding box width is proportional to its
-real-world width (~1.8 m for cars). This gives us a local pixels-per-meter
-scale at each detection, which naturally handles perspective — far vehicles
-have small boxes (more meters/pixel), close vehicles have large boxes
-(fewer meters/pixel).
-
-Usage:
-    python vehicle_speed_estimator.py --source video.mp4 --model best.pt
-    python vehicle_speed_estimator.py --source video.mp4 --model best.pt --output result.mp4
-"""
 
 import argparse
 from collections import defaultdict
@@ -27,19 +9,13 @@ from ultralytics import YOLO
 import supervision as sv
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# CONFIG
-# ──────────────────────────────────────────────────────────────────────────────
 
 DEFAULT_MODEL = "runs/detect/vehicle_detector/weights/best.pt"
 
 CONFIDENCE_THRESHOLD = 0.3
 
-# Average real-world vehicle width in meters (used for auto-calibration).
-# Cars ≈ 1.8 m, SUVs ≈ 2.0 m, trucks ≈ 2.5 m. 1.8 is a safe default.
 AVG_VEHICLE_WIDTH_M = 1.8
 
-# Tracker config — high lost_track_buffer survives ~2 s occlusion at 30 fps
 TRACKER_CONFIG = dict(
     track_activation_threshold=0.25,
     lost_track_buffer=60,
@@ -47,27 +23,13 @@ TRACKER_CONFIG = dict(
     frame_rate=30,
 )
 
-# Speed smoothing: rolling average over N frames to reduce jitter
 SPEED_SMOOTHING_WINDOW = 10
 
-# Discard speed readings above this (likely ID swaps or noise)
 MAX_REASONABLE_SPEED_KMH = 200.0
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# SPEED ESTIMATOR
-# ──────────────────────────────────────────────────────────────────────────────
 
 class SpeedEstimator:
-    """Auto-calibrated vehicle speed estimation pipeline.
-
-    Instead of requiring a manual homography (4-point perspective transform),
-    this uses each vehicle's bounding box width as a dynamic scale reference:
-        pixels_per_meter ≈ bbox_width / AVG_VEHICLE_WIDTH_M
-
-    Frame-to-frame pixel displacement is converted to meters using this local
-    scale, then divided by the time delta to get speed.
-    """
 
     def __init__(
         self,
@@ -81,12 +43,10 @@ class SpeedEstimator:
         cfg = tracker_config or TRACKER_CONFIG
         self.tracker = sv.ByteTrack(**cfg)
 
-        # Per-track state: prev pixel position, prev timestamp, speed history
         self.track_state: Dict[int, dict] = defaultdict(
             lambda: {"prev_px": None, "prev_time": None, "speeds": []}
         )
 
-        # Annotators
         self.box_annotator = sv.BoxAnnotator(thickness=2)
         self.label_annotator = sv.LabelAnnotator(
             text_thickness=1, text_scale=0.5, text_padding=5
@@ -105,10 +65,6 @@ class SpeedEstimator:
     def _update_speed(
         self, track_id: int, pixel_point: np.ndarray, bbox_w: float, timestamp: float
     ) -> float:
-        """Compute speed for a tracked vehicle using auto-calibrated scale.
-
-        Returns smoothed speed in km/h.
-        """
         state = self.track_state[track_id]
 
         if state["prev_px"] is None:
@@ -120,22 +76,18 @@ class SpeedEstimator:
         if dt <= 0:
             return self._smoothed_speed(track_id)
 
-        # Pixel displacement
         displacement_px = float(np.linalg.norm(pixel_point - state["prev_px"]))
 
-        # Auto-calibrate: local scale from bounding box width
         pixels_per_meter = bbox_w / self.avg_vehicle_width_m
         if pixels_per_meter < 1.0:
-            pixels_per_meter = 1.0  # guard against degenerate boxes
+            pixels_per_meter = 1.0  
 
         distance_m = displacement_px / pixels_per_meter
         speed_kmh = (distance_m / dt) * 3.6
 
-        # Outlier gate
         if speed_kmh > MAX_REASONABLE_SPEED_KMH:
             speed_kmh = self._smoothed_speed(track_id)
 
-        # Rolling average
         state["speeds"].append(speed_kmh)
         if len(state["speeds"]) > SPEED_SMOOTHING_WINDOW:
             state["speeds"] = state["speeds"][-SPEED_SMOOTHING_WINDOW:]
@@ -157,27 +109,15 @@ class SpeedEstimator:
     def process_frame(
         self, frame: np.ndarray, timestamp: float
     ) -> Tuple[np.ndarray, sv.Detections]:
-        """Run detection -> tracking -> speed estimation -> annotation.
-
-        Args:
-            frame:     BGR image (H, W, 3).
-            timestamp: seconds since video start.
-
-        Returns:
-            annotated_frame, detections
-        """
-        # 1) Detect
+        
         results = self.model(frame, verbose=False)[0]
         detections = sv.Detections.from_ultralytics(results)
 
-        # 2) Confidence filter
         mask = detections.confidence >= CONFIDENCE_THRESHOLD
         detections = detections[mask]
 
-        # 3) Track
         detections = self.tracker.update_with_detections(detections)
 
-        # 4) Compute speeds & build labels
         labels: List[str] = []
         active_ids: set = set()
 
@@ -193,7 +133,6 @@ class SpeedEstimator:
 
         self._prune_stale_tracks(active_ids)
 
-        # 5) Annotate
         annotated = frame.copy()
         annotated = self.box_annotator.annotate(scene=annotated, detections=detections)
         annotated = self.label_annotator.annotate(
@@ -203,17 +142,12 @@ class SpeedEstimator:
         return annotated, detections
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# VIDEO LOOP
-# ──────────────────────────────────────────────────────────────────────────────
-
 def run_pipeline(
     source_path: str,
     output_path: Optional[str] = None,
     display: bool = True,
     model_weights: str = DEFAULT_MODEL,
 ):
-    """Process video end-to-end: detect, track, estimate speed, annotate."""
 
     cap = cv2.VideoCapture(source_path)
     if not cap.isOpened():
@@ -245,15 +179,14 @@ def run_pipeline(
 
             timestamp = frame_idx / fps
 
-            # Draw a simulated obstacle: red horizontal bar (50px tall) across the frame
-            obstacle_y = height // 2  # centered vertically
+            obstacle_y = height // 2
             obstacle_h = 50
             cv2.rectangle(
                 frame,
                 (0, obstacle_y - obstacle_h // 2),
                 (width, obstacle_y + obstacle_h // 2),
-                (0, 0, 255),  # red BGR
-                -1,  # filled
+                (0, 0, 255),
+                -1,  
             )
             cv2.putText(
                 frame, "OBSTACLE", (width // 2 - 80, obstacle_y + 7),
@@ -287,9 +220,6 @@ def run_pipeline(
         print(f"Output saved to: {output_path}")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# CLI
-# ──────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
