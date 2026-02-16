@@ -1,31 +1,16 @@
-"""
-Train YOLOv8 on Local Vehicle Dataset
-======================================
-Trains a YOLOv8 model on the local Vehicles/ dataset (YOLO format).
-
-Usage:
-    python train_custom_model.py
-    python train_custom_model.py --epochs 50 --batch 8 --device cpu
-
-After training, best weights are saved to:
-    runs/detect/vehicle_detector/weights/best.pt
-"""
 
 import argparse
 from pathlib import Path
 
 from ultralytics import YOLO
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Defaults
-# ──────────────────────────────────────────────────────────────────────────────
 
 DATASET_YAML = str(Path(__file__).parent / "Vehicles" / "data.yaml")
 BASE_MODEL = "yolov8n.pt"
 EPOCHS = 100
 IMG_SIZE = 640
 BATCH_SIZE = 16
-DEVICE = "0"  # "0" for first GPU, "cpu" for CPU-only
+DEVICE = "0"
 PROJECT_NAME = "runs"
 RUN_NAME = "vehicle_detector"
 
@@ -38,7 +23,7 @@ def train(
     batch: int = BATCH_SIZE,
     device: str = DEVICE,
 ) -> str:
-    """Fine-tune YOLOv8 on the local dataset. Returns path to best weights."""
+    
 
     if not Path(data_yaml).exists():
         raise FileNotFoundError(f"data.yaml not found at {data_yaml}")
@@ -54,7 +39,6 @@ def train(
         project=PROJECT_NAME,
         name=RUN_NAME,
         exist_ok=True,
-        # ── Augmentation (tuned for vehicle detection) ────────────────
         hsv_h=0.015,
         hsv_s=0.5,
         hsv_v=0.4,
@@ -65,7 +49,6 @@ def train(
         mixup=0.1,
         fliplr=0.5,
         flipud=0.0,
-        # ── Training strategy ─────────────────────────────────────────
         patience=20,
         optimizer="AdamW",
         lr0=0.001,
@@ -81,7 +64,6 @@ def train(
 
 
 def validate(weights_path: str, data_yaml: str = DATASET_YAML):
-    """Run validation and print metrics."""
     model = YOLO(weights_path)
     metrics = model.val(data=data_yaml, imgsz=IMG_SIZE, device=DEVICE)
 
@@ -108,7 +90,6 @@ if __name__ == "__main__":
     print("  Vehicle Detector — Training")
     print("=" * 60)
 
-    # Train
     print(f"\n[1/2] Training on {args.data} ...")
     weights = train(
         data_yaml=args.data,
@@ -119,7 +100,6 @@ if __name__ == "__main__":
         device=args.device,
     )
 
-    # Validate
     print(f"\n[2/2] Validating ...")
     validate(weights, args.data)
 
